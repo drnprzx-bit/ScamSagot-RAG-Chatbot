@@ -8,7 +8,7 @@ from rag_engine import (
     corpus_sha256,
     create_chunks,
     extract_pages,
-    ollama_chat,
+    ollama_chat_stream,
     retrieve,
 )
 
@@ -231,20 +231,23 @@ if question:
             with st.chat_message("user"):
                 st.markdown(question)
             with st.chat_message("assistant"):
-                with st.spinner("Retrieving evidence and generating an answer…"):
-                    try:
+                try:
+                    with st.status("Retrieving evidence…", expanded=False) as status:
                         size, overlap = CONFIGS[st.session_state.config_id]
                         pages, chunks, faiss_index, embedding_model = get_rag_resources(st.session_state.pdf_bytes, size, overlap)
                         sources = retrieve(question, chunks, faiss_index, embedding_model)
-                        answer = ollama_chat(question, sources, OLLAMA_BASE_URL, OLLAMA_MODEL)
-                        st.markdown(answer)
-                        st.session_state.messages.append({"role": "assistant", "content": answer, "question": question, "sources": sources})
-                    except requests.RequestException as exc:
-                        error = f"Ollama request failed ({type(exc).__name__}). Check that Ollama is running and reachable."
-                        st.error(error)
-                        st.session_state.messages.append({"role": "assistant", "content": error, "question": question, "sources": []})
-                    except Exception as exc:
-                        error = f"I couldn't complete that request: {exc}"
-                        st.error(error)
-                        st.session_state.messages.append({"role": "assistant", "content": error, "question": question, "sources": []})
+                        status.update(label="Generating answer…", state="running")
+                        answer = st.write_stream(
+                            ollama_chat_stream(question, sources, OLLAMA_BASE_URL, OLLAMA_MODEL)
+                        )
+                        status.update(label="Answer ready", state="complete")
+                    st.session_state.messages.append({"role": "assistant", "content": answer, "question": question, "sources": sources})
+                except requests.RequestException as exc:
+                    error = f"Ollama request failed ({type(exc).__name__}). Check that Ollama is running and reachable."
+                    st.error(error)
+                    st.session_state.messages.append({"role": "assistant", "content": error, "question": question, "sources": []})
+                except Exception as exc:
+                    error = f"I couldn't complete that request: {exc}"
+                    st.error(error)
+                    st.session_state.messages.append({"role": "assistant", "content": error, "question": question, "sources": []})
         st.rerun()

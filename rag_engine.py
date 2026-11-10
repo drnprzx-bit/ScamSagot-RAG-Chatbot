@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 from io import BytesIO
 from typing import Any
@@ -145,8 +146,8 @@ def retrieve(question: str, chunks: list[dict[str, Any]], index, embedding_model
     return results
 
 
-def ollama_chat(question: str, retrieved: list[dict[str, Any]], base_url: str, model: str,
-                temperature: float = 0.1, max_new_tokens: int = 1000):
+def ollama_chat_stream(question: str, retrieved: list[dict[str, Any]], base_url: str, model: str,
+                      temperature: float = 0.1, max_new_tokens: int = 512):
     evidence = []
     for item in retrieved:
         pdf_pages = ", ".join(map(str, item["pdf_pages"])) or "unavailable"
@@ -163,7 +164,7 @@ def ollama_chat(question: str, retrieved: list[dict[str, Any]], base_url: str, m
     )
     payload = {
         "model": model,
-        "stream": False,
+        "stream": True,
         "think": False,
         "messages": [
             {"role": "system", "content": system_prompt},
@@ -171,9 +172,24 @@ def ollama_chat(question: str, retrieved: list[dict[str, Any]], base_url: str, m
         ],
         "options": {"temperature": temperature, "num_predict": max_new_tokens},
     }
-    response = requests.post(f"{base_url.rstrip('/')}/api/chat", json=payload, timeout=600)
+    response = requests.post(
+        f"{base_url.rstrip('/')}/api/chat",
+        json=payload,
+        stream=True,
+        timeout=(15, 600),
+    )
     response.raise_for_status()
-    answer = response.json().get("message", {}).get("content", "").strip()
-    if not answer:
+    received_content = False
+    with response:
+        for line in response.iter_lines(decode_unicode=True):
+            if not line:
+                continue
+            event = json.loads(line)
+            if event.get("error"):
+                raise RuntimeError(f"Ollama error: {event['error']}")
+            content = event.get("message", {}).get("content", "")
+            if content:
+                received_content = True
+                yield content
+    if not received_content:
         raise RuntimeError("Ollama returned an empty answer.")
-    return answer
