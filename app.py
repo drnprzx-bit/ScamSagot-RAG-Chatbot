@@ -179,49 +179,42 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
-left, right = st.columns([0.68, 0.32], gap="large")
-with left:
-    st.markdown('<div class="section-label">Conversation</div>', unsafe_allow_html=True)
-    with st.container(height=560, border=False):
-        if not st.session_state.messages:
-            st.markdown('<div class="panel"><strong>Welcome to ScamSagot</strong><br><span class="subtle">Ask about the laws and regulations represented in the ScamSagot corpus. Each response is paired with the passages retrieved for your question.</span></div>', unsafe_allow_html=True)
-        for message in st.session_state.messages:
-            with st.chat_message(message["role"]):
-                st.markdown(message["content"])
-                if message["role"] == "assistant" and message.get("elapsed_seconds") is not None:
+@st.dialog("Retrieved sources", width="large")
+def show_sources(message_index: int):
+    message = st.session_state.messages[message_index]
+    st.caption(message.get("question", "Sources for this answer"))
+    for source in message.get("sources", []):
+        pdf_pages = ", ".join(map(str, source["pdf_pages"])) or "unavailable"
+        source_pages = ", ".join(map(str, source["source_pages"])) or "not embedded / unavailable"
+        with st.container(border=True):
+            st.markdown(f"<div class='source-meta'>SOURCE {source['rank']}</div><div class='source-heading'>{source['source_document']}</div>", unsafe_allow_html=True)
+            st.caption(f"Corpus PDF page(s): {pdf_pages} · Chunk {source['chunk_id']} · Score {source['faiss_score']:.3f}")
+            with st.expander("View retrieved passage"):
+                st.write(source["text"])
+                st.caption(f"Original source page(s): {source_pages}")
+
+st.markdown('<div class="section-label">Conversation</div>', unsafe_allow_html=True)
+with st.container(height=560, border=False):
+    if not st.session_state.messages:
+        st.markdown('<div class="panel"><strong>Welcome to ScamSagot</strong><br><span class="subtle">Ask about the laws and regulations represented in the ScamSagot corpus. Each response is paired with the passages retrieved for your question.</span></div>', unsafe_allow_html=True)
+    for message_index, message in enumerate(st.session_state.messages):
+        with st.chat_message(message["role"]):
+            st.markdown(message["content"])
+            if message["role"] == "assistant":
+                if message.get("elapsed_seconds") is not None:
                     st.caption(f"Completed in {message['elapsed_seconds']:.1f} seconds")
+                if message.get("sources"):
+                    if st.button(f"Sources · {len(message['sources'])}", key=f"sources_{st.session_state.active_chat_id}_{message_index}"):
+                        show_sources(message_index)
 
-    st.markdown('<div class="section-label">Try asking</div>', unsafe_allow_html=True)
-    suggestion_cols = st.columns(len(SUGGESTIONS))
-    for col, suggestion in zip(suggestion_cols, SUGGESTIONS):
-        with col:
-            if st.button(suggestion, key=f"suggest_{st.session_state.active_chat_id}_{SUGGESTIONS.index(suggestion)}", use_container_width=True):
-                st.session_state.pending_question = suggestion
-                st.rerun()
-    typed_question = st.chat_input("Ask a question about the corpus…")
-
-with right:
-    st.markdown('<div class="section-label">Sources</div>', unsafe_allow_html=True)
-    assistant_messages = [m for m in st.session_state.messages if m["role"] == "assistant" and m.get("sources")]
-    if assistant_messages:
-        labels = [f"Q{i+1} · {item['question'][:54]}" for i, item in enumerate(assistant_messages)]
-        selected = st.selectbox("Showing sources for", range(len(assistant_messages)), format_func=lambda index: labels[index])
-        selected_message = assistant_messages[selected]
-        st.caption(selected_message["question"])
-        for source in selected_message["sources"]:
-            pdf_pages = ", ".join(map(str, source["pdf_pages"])) or "unavailable"
-            source_pages = ", ".join(map(str, source["source_pages"])) or "not embedded / unavailable"
-            with st.container(border=True):
-                st.markdown(f"<div class='source-meta'>SOURCE {source['rank']}</div><div class='source-heading'>{source['source_document']}</div>", unsafe_allow_html=True)
-                st.caption(f"Corpus PDF page(s): {pdf_pages} · Chunk {source['chunk_id']} · Score {source['faiss_score']:.3f}")
-                with st.expander("View retrieved passage"):
-                    st.write(source["text"])
-                    st.caption(f"Original source page(s): {source_pages}")
-    else:
-        st.info("Retrieved sources will appear here after a question is answered.")
-    st.markdown('<div class="section-label">About ScamSagot</div>', unsafe_allow_html=True)
-    st.caption("Coverage follows the sources present in the uploaded corpus. Page references appear when available in its metadata.")
-    st.markdown('<div class="disclaimer">ScamSagot provides legal information based on Philippine laws. It is not a substitute for professional legal advice.</div>', unsafe_allow_html=True)
+st.markdown('<div class="section-label">Try asking</div>', unsafe_allow_html=True)
+suggestion_cols = st.columns(len(SUGGESTIONS))
+for col, suggestion in zip(suggestion_cols, SUGGESTIONS):
+    with col:
+        if st.button(suggestion, key=f"suggest_{st.session_state.active_chat_id}_{SUGGESTIONS.index(suggestion)}", use_container_width=True):
+            st.session_state.pending_question = suggestion
+            st.rerun()
+typed_question = st.chat_input("Ask a question about the corpus…")
 
 question = typed_question or st.session_state.pop("pending_question", None)
 if question:
@@ -233,7 +226,7 @@ if question:
         st.warning("Ollama is not configured. Add OLLAMA_BASE_URL and OLLAMA_MODEL in Streamlit Secrets.")
     else:
         st.session_state.messages.append({"role": "user", "content": question})
-        with left:
+        with st.container():
             with st.chat_message("user"):
                 st.markdown(question)
             with st.chat_message("assistant"):

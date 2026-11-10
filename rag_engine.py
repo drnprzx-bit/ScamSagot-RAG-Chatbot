@@ -15,10 +15,10 @@ from sentence_transformers import SentenceTransformer
 EMBEDDING_MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
 TOP_K = 6
 NUM_CTX = 8192
-# Calibrated on the 10 WW1 in-scope questions and five out-of-scope probes
-# across all four interface chunk configurations. Lowest in-scope top score:
-# 0.4831; highest out-of-scope top score: 0.2763.
-MIN_RETRIEVAL_SCORE = 0.38
+# Calibrated on the 10 WW1 questions, two in-scope scam-response questions,
+# and five out-of-scope probes across all four interface chunk configurations.
+# Lowest in-scope top score: 0.3358; highest out-of-scope top score: 0.2763.
+MIN_RETRIEVAL_SCORE = 0.30
 
 SOURCE_DEFINITIONS = [
     {"source_id": "RA10175", "title": "Republic Act No. 10175 - Cybercrime Prevention Act of 2012", "marker": r"SOURCE BEGINS:\s*Republic Act No\.\s*10175"},
