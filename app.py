@@ -57,6 +57,14 @@ SUGGESTIONS = [
     "What is the Transaction Pause Period under BSP Circular 1213?",
 ]
 
+# Read endpoint/model from Streamlit secrets; never expose endpoint settings to app visitors.
+try:
+    OLLAMA_BASE_URL = str(st.secrets["OLLAMA_BASE_URL"]).strip().rstrip("/")
+    OLLAMA_MODEL = str(st.secrets["OLLAMA_MODEL"]).strip()
+except Exception:
+    OLLAMA_BASE_URL = ""
+    OLLAMA_MODEL = ""
+
 @st.cache_resource(show_spinner="Loading embedding model…")
 def get_embedding_model(model_name: str):
     from sentence_transformers import SentenceTransformer
@@ -106,11 +114,13 @@ with st.sidebar:
     st.caption(f"{len([m for m in st.session_state.messages if m['role']=='user'])} questions")
     st.markdown("---")
     st.markdown('<div class="section-label">Ollama connection</div>', unsafe_allow_html=True)
-    ollama_url = st.text_input("Ollama base URL", value="", placeholder="Enter your reachable Ollama URL", type="password", help="Not displayed elsewhere or saved in chat history.")
-    ollama_model = st.text_input("Exact model identifier", value="", placeholder="Enter the installed model name")
-    if st.button("Check connection", use_container_width=True):
-        ok, message = check_ollama(ollama_url.strip(), ollama_model.strip())
-        (st.success if ok else st.error)(message)
+    if OLLAMA_BASE_URL and OLLAMA_MODEL:
+        st.caption(f"Configured model: {OLLAMA_MODEL}")
+        if st.button("Check connection", use_container_width=True):
+            ok, message = check_ollama(OLLAMA_BASE_URL, OLLAMA_MODEL)
+            (st.success if ok else st.error)(message)
+    else:
+        st.info("Add OLLAMA_BASE_URL and OLLAMA_MODEL in Streamlit Secrets to enable answers.")
     st.markdown("---")
     with st.expander("FAQs"):
         st.write("ScamSagot answers using passages retrieved from the uploaded corpus. Ask a specific question and review its cited sources.")
@@ -191,8 +201,8 @@ question = typed_question or st.session_state.pop("pending_question", None)
 if question:
     if not st.session_state.get("rag_ready"):
         st.warning("Upload and validate the corpus before asking a question.")
-    elif not ollama_url.strip() or not ollama_model.strip():
-        st.warning("Enter the Ollama base URL and exact model identifier in the sidebar first.")
+    elif not OLLAMA_BASE_URL or not OLLAMA_MODEL:
+        st.warning("Ollama is not configured. Add OLLAMA_BASE_URL and OLLAMA_MODEL in Streamlit Secrets.")
     else:
         st.session_state.messages.append({"role": "user", "content": question})
         with left:
@@ -204,7 +214,7 @@ if question:
                         size, overlap = CONFIGS[st.session_state.config_id]
                         chunks, faiss_index, embedding_model = get_rag_resources(st.session_state.pdf_bytes, size, overlap)
                         sources = retrieve(question, chunks, faiss_index, embedding_model)
-                        answer = ollama_chat(question, sources, ollama_url.strip(), ollama_model.strip())
+                        answer = ollama_chat(question, sources, OLLAMA_BASE_URL, OLLAMA_MODEL)
                         st.markdown(answer)
                         st.session_state.messages.append({"role": "assistant", "content": answer, "question": question, "sources": sources})
                     except requests.RequestException as exc:
