@@ -14,6 +14,7 @@ from sentence_transformers import SentenceTransformer
 
 EMBEDDING_MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
 TOP_K = 6
+NUM_CTX = 8192
 
 SOURCE_DEFINITIONS = [
     {"source_id": "RA10175", "title": "Republic Act No. 10175 - Cybercrime Prevention Act of 2012", "marker": r"SOURCE BEGINS:\s*Republic Act No\.\s*10175"},
@@ -189,7 +190,11 @@ ScamSagot provides legal information based on Philippine laws. It is not a subst
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": f"Question:\n{question}\n\nRetrieved evidence:\n\n" + "\n\n".join(evidence)},
         ],
-        "options": {"temperature": temperature, "num_predict": max_new_tokens},
+        "options": {
+            "temperature": temperature,
+            "num_predict": max_new_tokens,
+            "num_ctx": NUM_CTX,
+        },
     }
     response = requests.post(
         f"{base_url.rstrip('/')}/api/chat",
