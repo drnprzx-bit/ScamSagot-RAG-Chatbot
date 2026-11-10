@@ -13,7 +13,7 @@ from pypdf import PdfReader
 from sentence_transformers import SentenceTransformer
 
 EMBEDDING_MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
-TOP_K = 3
+TOP_K = 6
 
 SOURCE_DEFINITIONS = [
     {"source_id": "RA10175", "title": "Republic Act No. 10175 - Cybercrime Prevention Act of 2012", "marker": r"SOURCE BEGINS:\s*Republic Act No\.\s*10175"},
@@ -147,7 +147,7 @@ def retrieve(question: str, chunks: list[dict[str, Any]], index, embedding_model
 
 
 def ollama_chat_stream(question: str, retrieved: list[dict[str, Any]], base_url: str, model: str,
-                      temperature: float = 0.1, max_new_tokens: int = 512):
+                      temperature: float = 0.1, max_new_tokens: int = 1000):
     evidence = []
     for item in retrieved:
         pdf_pages = ", ".join(map(str, item["pdf_pages"])) or "unavailable"
