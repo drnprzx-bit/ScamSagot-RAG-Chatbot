@@ -1,5 +1,6 @@
 import streamlit as st
 import requests
+import time
 from pathlib import Path
 
 from rag_engine import (
@@ -184,6 +185,8 @@ with left:
     for message in st.session_state.messages:
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
+            if message["role"] == "assistant" and message.get("elapsed_seconds") is not None:
+                st.caption(f"Completed in {message['elapsed_seconds']:.1f} seconds")
 
     st.markdown('<div class="section-label">Try asking</div>', unsafe_allow_html=True)
     suggestion_cols = st.columns(len(SUGGESTIONS))
@@ -231,6 +234,7 @@ if question:
             with st.chat_message("user"):
                 st.markdown(question)
             with st.chat_message("assistant"):
+                request_started = time.perf_counter()
                 try:
                     with st.status("Retrieving evidence…", expanded=False) as status:
                         size, overlap = CONFIGS[st.session_state.config_id]
@@ -241,7 +245,9 @@ if question:
                             ollama_chat_stream(question, sources, OLLAMA_BASE_URL, OLLAMA_MODEL)
                         )
                         status.update(label="Answer ready", state="complete")
-                    st.session_state.messages.append({"role": "assistant", "content": answer, "question": question, "sources": sources})
+                    elapsed_seconds = time.perf_counter() - request_started
+                    st.caption(f"Completed in {elapsed_seconds:.1f} seconds")
+                    st.session_state.messages.append({"role": "assistant", "content": answer, "question": question, "sources": sources, "elapsed_seconds": elapsed_seconds})
                 except requests.RequestException as exc:
                     error = f"Ollama request failed ({type(exc).__name__}). Check that Ollama is running and reachable."
                     st.error(error)
