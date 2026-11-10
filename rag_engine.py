@@ -164,6 +164,7 @@ def ollama_chat(question: str, retrieved: list[dict[str, Any]], base_url: str, m
     payload = {
         "model": model,
         "stream": False,
+        "think": False,
         "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": f"Question:\n{question}\n\nRetrieved evidence:\n\n" + "\n\n".join(evidence)},

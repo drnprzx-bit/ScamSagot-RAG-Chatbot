@@ -15,7 +15,7 @@ python -m pip install -r requirements.txt
 streamlit run app.py
 ```
 
-In the app, upload the consolidated ScamSagot corpus PDF, choose a chunking configuration, then enter the Ollama URL reachable from the computer running Streamlit and the exact model identifier installed in Ollama. Click **Check connection** before asking questions. The app does not assume a URL or model name.
+The consolidated ScamSagot corpus PDF is bundled under `data/`; users do not upload their own corpus. In the app, choose a chunking configuration, click **Extract PDF and prepare retrieval**, then use **Download extracted corpus text** if needed. Configure `OLLAMA_BASE_URL` and `OLLAMA_MODEL` in Streamlit Secrets; they are not entered in the sidebar. The Ollama URL must be reachable by the Streamlit server.
 
 The Sources panel displays the actual passages retrieved for each question, including rank, chunk ID, FAISS score, source title, and available combined-corpus/original page metadata. Source titles and page details depend on the corpus markers and text that can be extracted.
 

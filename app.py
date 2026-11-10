@@ -1,5 +1,6 @@
 import streamlit as st
 import requests
+from pathlib import Path
 
 from rag_engine import (
     EMBEDDING_MODEL_NAME,
@@ -45,6 +46,8 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+CORPUS_PATH = Path(__file__).resolve().parent / "data" / "ScamSagot_Consolidated_Reference_RAG.pdf"
+
 CONFIGS = {
     "A_800_0": (800, 0),
     "B_800_100": (800, 100),
@@ -76,7 +79,7 @@ def get_rag_resources(pdf_bytes: bytes, chunk_size: int, overlap: int):
     chunks = create_chunks(pages, chunk_size, overlap)
     model = get_embedding_model(EMBEDDING_MODEL_NAME)
     index = build_index(chunks, model)
-    return chunks, index, model
+    return pages, chunks, index, model
 
 
 def check_ollama(url: str, model: str):
@@ -123,7 +126,7 @@ with st.sidebar:
         st.info("Add OLLAMA_BASE_URL and OLLAMA_MODEL in Streamlit Secrets to enable answers.")
     st.markdown("---")
     with st.expander("FAQs"):
-        st.write("ScamSagot answers using passages retrieved from the uploaded corpus. Ask a specific question and review its cited sources.")
+        st.write("ScamSagot answers using passages retrieved from its bundled corpus. Ask a specific question and review its cited sources.")
     with st.expander("About"):
         st.write("ScamSagot is a RAG prototype for Philippine financial consumer protection, cybercrime, and scam-related legal information.")
     with st.expander("Disclaimer"):
@@ -138,29 +141,46 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 with st.expander("Corpus & retrieval settings", expanded=not st.session_state.get("rag_ready", False)):
-    st.caption("Upload the reference corpus and choose a chunking configuration. The corpus is indexed once per file/configuration and reused across reruns.")
-    uploaded_pdf = st.file_uploader("Upload the consolidated ScamSagot corpus PDF", type=["pdf"])
+    st.caption("ScamSagot uses the corpus PDF bundled with this app. Choose a chunking configuration, then extract and index the PDF.")
     config_id = st.selectbox("Chunking configuration", list(CONFIGS.keys()), format_func=lambda key: f"{key} — {CONFIGS[key][0]} characters / {CONFIGS[key][1]} overlap")
-    if uploaded_pdf is None:
-        st.info("Upload the consolidated corpus PDF to start. The app validates the corpus source markers before indexing.")
-    else:
+    if st.button("Extract PDF and prepare retrieval", type="primary"):
         try:
+            if not CORPUS_PATH.is_file():
+                raise FileNotFoundError(f"Bundled corpus not found: {CORPUS_PATH.name}")
+            pdf_bytes = CORPUS_PATH.read_bytes()
             size, overlap = CONFIGS[config_id]
-            pdf_bytes = uploaded_pdf.getvalue()
-            chunks, faiss_index, embedding_model = get_rag_resources(pdf_bytes, size, overlap)
-            st.success(f"Corpus ready · {len(chunks):,} chunks · {config_id}")
+            pages, chunks, faiss_index, embedding_model = get_rag_resources(pdf_bytes, size, overlap)
             st.session_state.rag_ready = True
             st.session_state.pdf_bytes = pdf_bytes
             st.session_state.config_id = config_id
+            st.session_state.extracted_text = "\n\n".join(
+                f"Source: {page['source_document'] or 'Unidentified'}\n"
+                f"Combined corpus PDF page: {page['pdf_page']}\n{page['text']}"
+                for page in pages
+            )
+            st.success(f"Corpus ready · {len(chunks):,} chunks · {config_id}")
         except Exception as exc:
             st.session_state.rag_ready = False
-            st.error(f"Could not prepare this corpus: {exc}")
+            st.error(f"Could not extract or prepare the bundled corpus: {exc}")
+    elif st.session_state.get("rag_ready"):
+        st.success(f"Corpus ready · {st.session_state.get('config_id', 'configuration')} · {CORPUS_PATH.name}")
+    else:
+        st.info(f"Bundled corpus: {CORPUS_PATH.name}. Select a configuration and choose Extract PDF to start.")
+
+    if st.session_state.get("rag_ready") and st.session_state.get("extracted_text"):
+        st.download_button(
+            "Download extracted corpus text",
+            data=st.session_state.extracted_text,
+            file_name="ScamSagot_Extracted_Corpus.txt",
+            mime="text/plain; charset=utf-8",
+            use_container_width=True,
+        )
 
 left, right = st.columns([0.68, 0.32], gap="large")
 with left:
     st.markdown('<div class="section-label">Conversation</div>', unsafe_allow_html=True)
     if not st.session_state.messages:
-        st.markdown('<div class="panel"><strong>Welcome to ScamSagot</strong><br><span class="subtle">Ask about the laws and regulations represented in the uploaded corpus. Each response is paired with the passages retrieved for your question.</span></div>', unsafe_allow_html=True)
+        st.markdown('<div class="panel"><strong>Welcome to ScamSagot</strong><br><span class="subtle">Ask about the laws and regulations represented in the ScamSagot corpus. Each response is paired with the passages retrieved for your question.</span></div>', unsafe_allow_html=True)
     for message in st.session_state.messages:
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
@@ -200,7 +220,9 @@ with right:
 question = typed_question or st.session_state.pop("pending_question", None)
 if question:
     if not st.session_state.get("rag_ready"):
-        st.warning("Upload and validate the corpus before asking a question.")
+        st.warning("Choose a chunking configuration and click Extract PDF and prepare retrieval first.")
+    elif st.session_state.get("config_id") != config_id:
+        st.warning("The chunking configuration changed. Click Extract PDF and prepare retrieval to rebuild the index.")
     elif not OLLAMA_BASE_URL or not OLLAMA_MODEL:
         st.warning("Ollama is not configured. Add OLLAMA_BASE_URL and OLLAMA_MODEL in Streamlit Secrets.")
     else:
@@ -212,7 +234,7 @@ if question:
                 with st.spinner("Retrieving evidence and generating an answer…"):
                     try:
                         size, overlap = CONFIGS[st.session_state.config_id]
-                        chunks, faiss_index, embedding_model = get_rag_resources(st.session_state.pdf_bytes, size, overlap)
+                        pages, chunks, faiss_index, embedding_model = get_rag_resources(st.session_state.pdf_bytes, size, overlap)
                         sources = retrieve(question, chunks, faiss_index, embedding_model)
                         answer = ollama_chat(question, sources, OLLAMA_BASE_URL, OLLAMA_MODEL)
                         st.markdown(answer)

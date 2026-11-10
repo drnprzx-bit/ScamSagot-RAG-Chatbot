@@ -7,3 +7,5 @@ __pycache__/
 .streamlit/secrets.toml
 *.faiss
 *.pdf
+
+!data/ScamSagot_Consolidated_Reference_RAG.pdf
