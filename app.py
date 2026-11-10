@@ -9,6 +9,7 @@ from rag_engine import (
     corpus_sha256,
     create_chunks,
     extract_pages,
+    has_relevant_evidence,
     ollama_chat_stream,
     retrieve,
 )
@@ -21,7 +22,7 @@ st.markdown("""
 .stApp { background: #0A0A0A; color: #F5F5F5; }
 [data-testid="stHeader"] { background: rgba(10,10,10,.96); }
 [data-testid="stSidebar"] { background: #111111; border-right: 1px solid #3A3A3A; }
-.block-container { max-width: 1480px; padding-top: 1.3rem; padding-bottom: 2rem; }
+.block-container { max-width: 1480px; padding-top: 3.5rem; padding-bottom: 2rem; }
 .brand { display: flex; align-items: center; gap: 9px; color: #FFD700; font-weight: 800; font-size: 1.5rem; letter-spacing: .015em; }
 .brand-mark { width: 28px; height: 28px; flex: 0 0 28px; color: #FFD700; }
 .subtle { color: #C8C8C8; }
@@ -31,6 +32,7 @@ st.markdown("""
 .hero-copy { color: #E1E1E1; max-width: 680px; font-size: 1rem; }
 .section-label { color: #E5C100; font-size: .72rem; font-weight: 750; letter-spacing: .12em; text-transform: uppercase; margin: 1rem 0 .5rem; }
 [data-testid="stChatMessage"] { background: #222222; border: 1px solid #3A3A3A; border-radius: 15px; }
+.conversation-scroll { height: 62vh; min-height: 420px; max-height: 760px; overflow-y: auto; padding: .25rem .65rem .75rem .1rem; scrollbar-color: #555 #171717; }
 [data-testid="stChatInput"] { border: 1px solid #B8860B; border-radius: 14px; background: #222222; }
 [data-testid="stChatInput"] textarea { color: #FFFFFF; }
 [data-testid="stExpander"] { border: 1px solid #3A3A3A; border-radius: 12px; background: #161616; }
@@ -126,6 +128,42 @@ with st.sidebar:
     else:
         st.info("Add OLLAMA_BASE_URL and OLLAMA_MODEL in Streamlit Secrets to enable answers.")
     st.markdown("---")
+    with st.expander("Corpus & retrieval settings", expanded=not st.session_state.get("rag_ready", False)):
+        st.caption("Uses the corpus PDF bundled with this app. Choose a chunking configuration, then extract and index the PDF.")
+        config_id = st.selectbox("Chunking configuration", list(CONFIGS.keys()), format_func=lambda key: f"{key} — {CONFIGS[key][0]} characters / {CONFIGS[key][1]} overlap")
+        if st.button("Extract PDF and prepare retrieval", type="primary", use_container_width=True):
+            try:
+                if not CORPUS_PATH.is_file():
+                    raise FileNotFoundError(f"Bundled corpus not found: {CORPUS_PATH.name}")
+                pdf_bytes = CORPUS_PATH.read_bytes()
+                size, overlap = CONFIGS[config_id]
+                pages, chunks, faiss_index, embedding_model = get_rag_resources(pdf_bytes, size, overlap)
+                st.session_state.rag_ready = True
+                st.session_state.pdf_bytes = pdf_bytes
+                st.session_state.config_id = config_id
+                st.session_state.extracted_text = "\n\n".join(
+                    f"Source: {page['source_document'] or 'Unidentified'}\n"
+                    f"Combined corpus PDF page: {page['pdf_page']}\n{page['text']}"
+                    for page in pages
+                )
+                st.success(f"Corpus ready · {len(chunks):,} chunks · {config_id}")
+            except Exception as exc:
+                st.session_state.rag_ready = False
+                st.error(f"Could not extract or prepare the bundled corpus: {exc}")
+        elif st.session_state.get("rag_ready") and st.session_state.get("config_id") == config_id:
+            st.success(f"Corpus ready · {st.session_state.get('config_id')} · {CORPUS_PATH.name}")
+        else:
+            st.info(f"Bundled corpus: {CORPUS_PATH.name}. Select a configuration and choose Extract PDF to start.")
+
+        if st.session_state.get("rag_ready") and st.session_state.get("extracted_text"):
+            st.download_button(
+                "Download extracted corpus text",
+                data=st.session_state.extracted_text,
+                file_name="ScamSagot_Extracted_Corpus.txt",
+                mime="text/plain; charset=utf-8",
+                use_container_width=True,
+            )
+    st.markdown("---")
     with st.expander("FAQs"):
         st.write("ScamSagot answers using passages retrieved from its bundled corpus. Ask a specific question and review its cited sources.")
     with st.expander("About"):
@@ -141,52 +179,17 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
-with st.expander("Corpus & retrieval settings", expanded=not st.session_state.get("rag_ready", False)):
-    st.caption("ScamSagot uses the corpus PDF bundled with this app. Choose a chunking configuration, then extract and index the PDF.")
-    config_id = st.selectbox("Chunking configuration", list(CONFIGS.keys()), format_func=lambda key: f"{key} — {CONFIGS[key][0]} characters / {CONFIGS[key][1]} overlap")
-    if st.button("Extract PDF and prepare retrieval", type="primary"):
-        try:
-            if not CORPUS_PATH.is_file():
-                raise FileNotFoundError(f"Bundled corpus not found: {CORPUS_PATH.name}")
-            pdf_bytes = CORPUS_PATH.read_bytes()
-            size, overlap = CONFIGS[config_id]
-            pages, chunks, faiss_index, embedding_model = get_rag_resources(pdf_bytes, size, overlap)
-            st.session_state.rag_ready = True
-            st.session_state.pdf_bytes = pdf_bytes
-            st.session_state.config_id = config_id
-            st.session_state.extracted_text = "\n\n".join(
-                f"Source: {page['source_document'] or 'Unidentified'}\n"
-                f"Combined corpus PDF page: {page['pdf_page']}\n{page['text']}"
-                for page in pages
-            )
-            st.success(f"Corpus ready · {len(chunks):,} chunks · {config_id}")
-        except Exception as exc:
-            st.session_state.rag_ready = False
-            st.error(f"Could not extract or prepare the bundled corpus: {exc}")
-    elif st.session_state.get("rag_ready"):
-        st.success(f"Corpus ready · {st.session_state.get('config_id', 'configuration')} · {CORPUS_PATH.name}")
-    else:
-        st.info(f"Bundled corpus: {CORPUS_PATH.name}. Select a configuration and choose Extract PDF to start.")
-
-    if st.session_state.get("rag_ready") and st.session_state.get("extracted_text"):
-        st.download_button(
-            "Download extracted corpus text",
-            data=st.session_state.extracted_text,
-            file_name="ScamSagot_Extracted_Corpus.txt",
-            mime="text/plain; charset=utf-8",
-            use_container_width=True,
-        )
-
 left, right = st.columns([0.68, 0.32], gap="large")
 with left:
     st.markdown('<div class="section-label">Conversation</div>', unsafe_allow_html=True)
-    if not st.session_state.messages:
-        st.markdown('<div class="panel"><strong>Welcome to ScamSagot</strong><br><span class="subtle">Ask about the laws and regulations represented in the ScamSagot corpus. Each response is paired with the passages retrieved for your question.</span></div>', unsafe_allow_html=True)
-    for message in st.session_state.messages:
-        with st.chat_message(message["role"]):
-            st.markdown(message["content"])
-            if message["role"] == "assistant" and message.get("elapsed_seconds") is not None:
-                st.caption(f"Completed in {message['elapsed_seconds']:.1f} seconds")
+    with st.container(height=560, border=False):
+        if not st.session_state.messages:
+            st.markdown('<div class="panel"><strong>Welcome to ScamSagot</strong><br><span class="subtle">Ask about the laws and regulations represented in the ScamSagot corpus. Each response is paired with the passages retrieved for your question.</span></div>', unsafe_allow_html=True)
+        for message in st.session_state.messages:
+            with st.chat_message(message["role"]):
+                st.markdown(message["content"])
+                if message["role"] == "assistant" and message.get("elapsed_seconds") is not None:
+                    st.caption(f"Completed in {message['elapsed_seconds']:.1f} seconds")
 
     st.markdown('<div class="section-label">Try asking</div>', unsafe_allow_html=True)
     suggestion_cols = st.columns(len(SUGGESTIONS))
@@ -240,14 +243,33 @@ if question:
                         size, overlap = CONFIGS[st.session_state.config_id]
                         pages, chunks, faiss_index, embedding_model = get_rag_resources(st.session_state.pdf_bytes, size, overlap)
                         sources = retrieve(question, chunks, faiss_index, embedding_model)
-                        status.update(label="Generating answer…", state="running")
-                        answer = st.write_stream(
-                            ollama_chat_stream(question, sources, OLLAMA_BASE_URL, OLLAMA_MODEL)
-                        )
-                        status.update(label="Answer ready", state="complete")
+                        if not has_relevant_evidence(sources):
+                            answer = (
+                                "I can answer questions when the ScamSagot corpus contains relevant evidence "
+                                "about Philippine financial consumer protection, cybercrime, or scam-related laws "
+                                "and regulations. I couldn't find enough relevant support for this question. "
+                                "Please ask about a topic covered by the corpus."
+                            )
+                            status.update(label="No sufficiently relevant evidence found", state="complete")
+                            st.markdown(answer)
+                            answer_sources = []
+                        else:
+                            status.update(label="Generating answer…", state="running")
+                            prior_history = st.session_state.messages[:-1][-3:]
+                            answer = st.write_stream(
+                                ollama_chat_stream(
+                                    question,
+                                    sources,
+                                    OLLAMA_BASE_URL,
+                                    OLLAMA_MODEL,
+                                    history=prior_history,
+                                )
+                            )
+                            status.update(label="Answer ready", state="complete")
+                            answer_sources = sources
                     elapsed_seconds = time.perf_counter() - request_started
                     st.caption(f"Completed in {elapsed_seconds:.1f} seconds")
-                    st.session_state.messages.append({"role": "assistant", "content": answer, "question": question, "sources": sources, "elapsed_seconds": elapsed_seconds})
+                    st.session_state.messages.append({"role": "assistant", "content": answer, "question": question, "sources": answer_sources, "elapsed_seconds": elapsed_seconds})
                 except requests.RequestException as exc:
                     error = f"Ollama request failed ({type(exc).__name__}). Check that Ollama is running and reachable."
                     st.error(error)
