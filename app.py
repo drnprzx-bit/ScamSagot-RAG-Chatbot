@@ -35,7 +35,8 @@ st.markdown("""
 .conversation-scroll { height: 62vh; min-height: 420px; max-height: 760px; overflow-y: auto; padding: .25rem .65rem .75rem .1rem; scrollbar-color: #555 #171717; }
 [data-testid="stChatInput"] { border: 1px solid #B8860B; border-radius: 14px; background: #222222; }
 [data-testid="stChatInput"] textarea { color: #FFFFFF; }
-[data-testid="stBottom"], [data-testid="stBottomBlockContainer"] { background: #0A0A0A !important; }
+[data-testid="stBottom"], [data-testid="stBottom"] > div, [data-testid="stBottomBlockContainer"] { background: #0A0A0A !important; box-shadow: none !important; }
+[data-testid="stBottom"]::before, [data-testid="stBottom"]::after { background: #0A0A0A !important; }
 [data-testid="stBottomBlockContainer"] { max-width: 1100px !important; width: calc(100% - 2rem) !important; margin-left: auto !important; margin-right: auto !important; }
 [data-testid="stChatInput"] > div { background: #222222 !important; border-color: #B8860B !important; }
 [data-testid="stChatInput"] button { background: #3A3A3A !important; color: #F5F5F5 !important; }
