@@ -9,6 +9,7 @@ from typing import Any
 import faiss
 import numpy as np
 import requests
+from rank_bm25 import BM25Okapi
 from pypdf import PdfReader
 from sentence_transformers import SentenceTransformer
 
@@ -139,6 +140,14 @@ def build_index(chunks: list[dict[str, Any]], embedding_model: SentenceTransform
     return index
 
 
+def build_bm25_index(chunks: list[dict[str, Any]]) -> BM25Okapi:
+    """Build a sparse keyword index over the same source-aware chunks as FAISS."""
+    if not chunks:
+        raise ValueError("Cannot build a BM25 index without chunks.")
+    tokenized_chunks = [re.findall(r"[\w]+", chunk["text"].lower()) for chunk in chunks]
+    return BM25Okapi(tokenized_chunks)
+
+
 def retrieve(question: str, chunks: list[dict[str, Any]], index, embedding_model: SentenceTransformer, top_k: int = TOP_K):
     if not question or not question.strip():
         raise ValueError("Enter a question first.")
@@ -151,9 +160,80 @@ def retrieve(question: str, chunks: list[dict[str, Any]], index, embedding_model
     return results
 
 
+def retrieve_hybrid(
+    question: str,
+    chunks: list[dict[str, Any]],
+    index,
+    bm25_index: BM25Okapi,
+    embedding_model: SentenceTransformer,
+    top_k: int = TOP_K,
+    candidate_multiplier: int = 5,
+    rrf_k: int = 60,
+) -> list[dict[str, Any]]:
+    """Fuse FAISS semantic and BM25 keyword rankings with Reciprocal Rank Fusion."""
+    if not question or not question.strip():
+        raise ValueError("Enter a question first.")
+    if top_k <= 0 or candidate_multiplier <= 0 or rrf_k <= 0:
+        raise ValueError("top_k, candidate_multiplier, and rrf_k must be positive.")
+
+    candidate_k = min(max(top_k * candidate_multiplier, top_k), len(chunks))
+    query_vector = embedding_model.encode(
+        [question], convert_to_numpy=True, normalize_embeddings=True
+    ).astype("float32")
+    faiss_scores, faiss_ids = index.search(query_vector, candidate_k)
+    faiss_ranks = {
+        int(chunk_id): rank
+        for rank, chunk_id in enumerate(faiss_ids[0], start=1)
+        if chunk_id >= 0
+    }
+    faiss_score_by_id = {
+        int(chunk_id): float(faiss_scores[0][rank - 1])
+        for chunk_id, rank in faiss_ranks.items()
+    }
+
+    query_tokens = re.findall(r"[\w]+", question.lower())
+    bm25_scores = bm25_index.get_scores(query_tokens)
+    bm25_ids = np.argsort(bm25_scores)[::-1][:candidate_k]
+    bm25_ranks = {int(chunk_id): rank for rank, chunk_id in enumerate(bm25_ids, start=1)}
+    bm25_score_by_id = {int(chunk_id): float(bm25_scores[int(chunk_id)]) for chunk_id in bm25_ids}
+
+    candidate_ids = set(faiss_ranks) | set(bm25_ranks)
+    fused = []
+    for chunk_id in candidate_ids:
+        rrf_score = 0.0
+        if chunk_id in faiss_ranks:
+            rrf_score += 1.0 / (rrf_k + faiss_ranks[chunk_id])
+        if chunk_id in bm25_ranks:
+            rrf_score += 1.0 / (rrf_k + bm25_ranks[chunk_id])
+        fused.append((chunk_id, rrf_score))
+    fused.sort(key=lambda item: item[1], reverse=True)
+
+    results = []
+    for rank, (chunk_id, rrf_score) in enumerate(fused[:top_k], start=1):
+        results.append({
+            **chunks[chunk_id],
+            "rank": rank,
+            "faiss_score": faiss_score_by_id.get(chunk_id),
+            "faiss_rank": faiss_ranks.get(chunk_id),
+            "bm25_score": bm25_score_by_id.get(chunk_id),
+            "bm25_rank": bm25_ranks.get(chunk_id),
+            "rrf_score": float(rrf_score),
+        })
+    # Apply the existing relevance gate only to FAISS scores represented in the
+    # final passages actually sent to the answer model.
+    selected_faiss_scores = [item["faiss_score"] for item in results if item["faiss_score"] is not None]
+    selected_faiss_top_score = max(selected_faiss_scores, default=None)
+    for item in results:
+        item["faiss_top_score"] = selected_faiss_top_score
+    return results
+
+
 def has_relevant_evidence(retrieved: list[dict[str, Any]]) -> bool:
     """Reject queries whose highest-scoring retrieved chunk falls below calibration cutoff."""
-    return bool(retrieved) and retrieved[0]["faiss_score"] >= MIN_RETRIEVAL_SCORE
+    if not retrieved:
+        return False
+    top_score = retrieved[0].get("faiss_top_score", retrieved[0].get("faiss_score"))
+    return top_score is not None and top_score >= MIN_RETRIEVAL_SCORE
 
 
 def ollama_chat_stream(question: str, retrieved: list[dict[str, Any]], base_url: str, model: str,

@@ -5,6 +5,7 @@ from pathlib import Path
 
 from rag_engine import (
     EMBEDDING_MODEL_NAME,
+    build_bm25_index,
     build_index,
     corpus_sha256,
     create_chunks,
@@ -12,6 +13,7 @@ from rag_engine import (
     has_relevant_evidence,
     ollama_chat_stream,
     retrieve,
+    retrieve_hybrid,
 )
 
 st.set_page_config(page_title="ScamSagot", page_icon="⚖️", layout="wide", initial_sidebar_state="expanded")
@@ -87,7 +89,8 @@ def get_rag_resources(pdf_bytes: bytes, chunk_size: int, overlap: int):
     chunks = create_chunks(pages, chunk_size, overlap)
     model = get_embedding_model(EMBEDDING_MODEL_NAME)
     index = build_index(chunks, model)
-    return pages, chunks, index, model
+    bm25_index = build_bm25_index(chunks)
+    return pages, chunks, index, bm25_index, model
 
 
 def check_ollama(url: str, model: str):
@@ -136,13 +139,19 @@ with st.sidebar:
     with st.expander("Corpus & retrieval settings", expanded=not st.session_state.get("rag_ready", False)):
         st.caption("Uses the corpus PDF bundled with this app. Choose a chunking configuration, then extract and index the PDF.")
         config_id = st.selectbox("Chunking configuration", list(CONFIGS.keys()), format_func=lambda key: f"{key} — {CONFIGS[key][0]} characters / {CONFIGS[key][1]} overlap")
+        retrieval_method = st.selectbox(
+            "Retrieval method",
+            ["faiss", "hybrid"],
+            format_func=lambda method: "FAISS semantic search" if method == "faiss" else "Hybrid (FAISS + BM25)",
+            help="Hybrid combines semantic similarity and exact keyword matching with Reciprocal Rank Fusion.",
+        )
         if st.button("Extract PDF and prepare retrieval", type="primary", use_container_width=True):
             try:
                 if not CORPUS_PATH.is_file():
                     raise FileNotFoundError(f"Bundled corpus not found: {CORPUS_PATH.name}")
                 pdf_bytes = CORPUS_PATH.read_bytes()
                 size, overlap = CONFIGS[config_id]
-                pages, chunks, faiss_index, embedding_model = get_rag_resources(pdf_bytes, size, overlap)
+                pages, chunks, faiss_index, bm25_index, embedding_model = get_rag_resources(pdf_bytes, size, overlap)
                 st.session_state.rag_ready = True
                 st.session_state.pdf_bytes = pdf_bytes
                 st.session_state.config_id = config_id
@@ -193,7 +202,16 @@ def show_sources(message_index: int):
         source_pages = ", ".join(map(str, source["source_pages"])) or "not embedded / unavailable"
         with st.container(border=True):
             st.markdown(f"<div class='source-meta'>SOURCE {source['rank']}</div><div class='source-heading'>{source['source_document']}</div>", unsafe_allow_html=True)
-            st.caption(f"Corpus PDF page(s): {pdf_pages} · Chunk {source['chunk_id']} · Score {source['faiss_score']:.3f}")
+            if source.get("rrf_score") is not None:
+                faiss_score = source.get("faiss_score")
+                faiss_label = f"{faiss_score:.3f}" if faiss_score is not None else "not in candidates"
+                bm25_rank = source.get("bm25_rank")
+                bm25_label = str(bm25_rank) if bm25_rank is not None else "not in candidates"
+                bm25_score = source.get("bm25_score")
+                bm25_score_label = f"{bm25_score:.3f}" if bm25_score is not None else "—"
+                st.caption(f"Corpus PDF page(s): {pdf_pages} · Chunk {source['chunk_id']} · RRF {source['rrf_score']:.4f} · FAISS {faiss_label} · BM25 rank/score {bm25_label}/{bm25_score_label}")
+            else:
+                st.caption(f"Corpus PDF page(s): {pdf_pages} · Chunk {source['chunk_id']} · FAISS similarity {source['faiss_score']:.3f}")
             with st.expander("View retrieved passage"):
                 st.write(source["text"])
                 st.caption(f"Original source page(s): {source_pages}")
@@ -239,8 +257,11 @@ if question:
                 try:
                     with st.status("Retrieving evidence…", expanded=False) as status:
                         size, overlap = CONFIGS[st.session_state.config_id]
-                        pages, chunks, faiss_index, embedding_model = get_rag_resources(st.session_state.pdf_bytes, size, overlap)
-                        sources = retrieve(question, chunks, faiss_index, embedding_model)
+                        pages, chunks, faiss_index, bm25_index, embedding_model = get_rag_resources(st.session_state.pdf_bytes, size, overlap)
+                        if retrieval_method == "hybrid":
+                            sources = retrieve_hybrid(question, chunks, faiss_index, bm25_index, embedding_model)
+                        else:
+                            sources = retrieve(question, chunks, faiss_index, embedding_model)
                         if not has_relevant_evidence(sources):
                             answer = (
                                 "I can answer questions when the ScamSagot corpus contains relevant evidence "
